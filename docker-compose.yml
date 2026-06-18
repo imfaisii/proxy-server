@@ -36,7 +36,8 @@ services:
       - /etc/mtg/secret:/etc/mtg/secret:ro
       - ./data/geoip:/app/data/geoip:ro
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   cloudflared:

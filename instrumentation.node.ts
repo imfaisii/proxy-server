@@ -23,10 +23,14 @@ if (!g.__mtpPollerStarted) {
 }
 
 async function start() {
-  try {
-    await ensureSchema();
-  } catch {
-    /* db unavailable; schema setup is best-effort */
+  // Retry: Postgres may still be accepting-connections-but-not-ready right after boot.
+  for (let i = 0; i < 10; i++) {
+    try {
+      await ensureSchema();
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
   }
 
   let running = false;

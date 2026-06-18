@@ -8,8 +8,8 @@ import { geoLookup, warmGeoip } from "@/lib/geoip";
 import { getLatest } from "@/lib/store";
 import { getActiveHistory, listCampaigns } from "@/lib/db";
 import { getCampaigns } from "@/lib/data";
-import type { MtgMetrics } from "@/lib/metrics";
-import type { HostConn } from "@/lib/conntrack";
+import { fetchMtgMetrics, type MtgMetrics } from "@/lib/metrics";
+import { listConnections, type HostConn } from "@/lib/conntrack";
 import {
   fb,
   fd,
@@ -248,7 +248,17 @@ export function buildServerInfo(uptimeSecs: number): ServerInfo {
 // ---- Full live state -----------------------------------------------------
 export async function buildLiveState(): Promise<DashboardState | null> {
   await warmGeoip();
-  const { metrics, conns } = getLatest();
+
+  // Prefer the poller's snapshot (it carries rate deltas + is off the request
+  // path). Fall back to an on-demand fetch when the store is empty — e.g. the
+  // poller hasn't run yet, or Next's bundle isolation gave the reader a fresh
+  // store instance. This guarantees /api/state serves live data when the proxy
+  // is reachable, instead of silently dropping to demo.
+  const snap = getLatest();
+  let metrics = snap.metrics;
+  let conns = snap.conns;
+  if (!metrics) metrics = await fetchMtgMetrics();
+  if (!conns || conns.length === 0) conns = await listConnections();
 
   // No live signal at all -> let the caller fall back to demo.
   if (!metrics && conns.length === 0) return null;

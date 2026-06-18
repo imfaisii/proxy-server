@@ -31,8 +31,10 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-# Run as the unprivileged node user; CAP_NET_ADMIN from compose still applies.
-USER node
+# Run as root. The console must read the host conntrack table, which needs
+# CAP_NET_ADMIN to be effective — a non-root user does NOT receive the
+# capability from compose's cap_add, so conntrack fails as `node`. This is a
+# single-tenant admin tool behind auth, already host-networked + NET_ADMIN.
 
 EXPOSE 3000
 CMD ["node", "server.js"]
