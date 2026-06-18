@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { CONFIG } from "@/lib/env";
 import { geoLookup, warmGeoip } from "@/lib/geoip";
+import { getServerIp } from "@/lib/net";
 import { getLatest } from "@/lib/store";
 import { getActiveHistory, listCampaigns } from "@/lib/db";
 import { getCampaigns } from "@/lib/data";
@@ -86,29 +87,43 @@ export function kpisFrom(m: MtgMetrics): Kpi[] {
 // All live flows are treated as Active (green). Geo is resolved per-IP; when the
 // GeoIP db is missing the row still renders with empty geo fields.
 export function connsToDisplay(conns: HostConn[]): DisplayConn[] {
-  return conns.map((c, idx) => {
-    const g = geoLookup(c.ip);
-    const region: RegionCode = g ? g.region : "AS";
-    return {
-      idx,
-      ip: c.ip,
-      code: g?.code || "",
-      country: g?.country || "",
-      city: g?.city || "",
-      region,
-      client: "Telegram",
-      since: c.sinceSecs,
-      dotColor: "#16a34a",
-      statusColor: "#15803d",
-      statusBg: "#e7f6ee",
-      statusLabel: "Active",
-      dur: fd(c.sinceSecs),
-      down: fb(c.down),
-      up: fb(c.up),
-      rawDown: c.down,
-      rawUp: c.up,
-    };
-  });
+  // Telegram clients open several parallel TCP connections per device (per-DC,
+  // media, updates), so conntrack reports multiple flows from one IP. Group by
+  // client IP so each device is a single row: summed traffic, longest-lived age.
+  const byIp = new Map<string, { down: number; up: number; since: number }>();
+  for (const c of conns) {
+    const e = byIp.get(c.ip) || { down: 0, up: 0, since: 0 };
+    e.down += c.down;
+    e.up += c.up;
+    e.since = Math.max(e.since, c.sinceSecs);
+    byIp.set(c.ip, e);
+  }
+
+  return [...byIp.entries()]
+    .sort((a, b) => b[1].down + b[1].up - (a[1].down + a[1].up))
+    .map(([ip, e], idx) => {
+      const g = geoLookup(ip);
+      const region: RegionCode = g ? g.region : "AS";
+      return {
+        idx,
+        ip,
+        code: g?.code || "",
+        country: g?.country || "",
+        city: g?.city || "",
+        region,
+        client: "Telegram",
+        since: e.since,
+        dotColor: "#16a34a",
+        statusColor: "#15803d",
+        statusBg: "#e7f6ee",
+        statusLabel: "Active",
+        dur: fd(e.since),
+        down: fb(e.down),
+        up: fb(e.up),
+        rawDown: e.down,
+        rawUp: e.up,
+      };
+    });
 }
 
 // ---- Country / region aggregations --------------------------------------
@@ -227,9 +242,9 @@ function maskSecret(secret: string): string {
   return secret.slice(0, 6) + "•".repeat(12) + secret.slice(-6);
 }
 
-export function buildServerInfo(uptimeSecs: number): ServerInfo {
+export async function buildServerInfo(uptimeSecs: number): Promise<ServerInfo> {
   const secret = readSecret();
-  const ip = CONFIG.SERVER_IP || SERVER.ip;
+  const ip = await getServerIp();
   const port = CONFIG.MTG_PORT || SERVER.port;
   const tgLink = `tg://proxy?server=${ip}&port=${port}&secret=${secret}`;
   return {
@@ -313,7 +328,7 @@ export async function buildLiveState(): Promise<DashboardState | null> {
     overview,
     connections,
     geography,
-    server: buildServerInfo(uptimeSecs),
+    server: await buildServerInfo(uptimeSecs),
     campaigns,
     campaignOn: true,
     source: "live",

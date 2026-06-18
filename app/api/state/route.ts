@@ -5,6 +5,7 @@
 import { NextResponse } from "next/server";
 import { isAuthed } from "@/lib/auth";
 import { buildLiveState } from "@/lib/aggregate";
+import { getServerIp } from "@/lib/net";
 import {
   INITIAL_LIVE,
   SERVER,
@@ -19,20 +20,20 @@ import {
   restrictedRawCount,
   countryAgg,
   seedChart,
-  tgLink,
   fn,
 } from "@/lib/data";
 import type { DashboardState } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-function demoState(): DashboardState {
+async function demoState(): Promise<DashboardState> {
   const conns = displayConns(0);
   const countryCount = countryAgg().length;
   const chart = seedChart();
   const health = getHealth(INITIAL_LIVE);
   const secret = SERVER.secret;
-  const link = tgLink();
+  const ip = await getServerIp();
+  const link = `tg://proxy?server=${ip}&port=${SERVER.port}&secret=${secret}`;
 
   return {
     overview: {
@@ -58,7 +59,7 @@ function demoState(): DashboardState {
       restrictedCount: fn(restrictedRawCount()),
     },
     server: {
-      ip: SERVER.ip,
+      ip,
       port: SERVER.port,
       domain: SERVER.domain,
       image: "nineseconds/mtg:2",
@@ -66,7 +67,7 @@ function demoState(): DashboardState {
         secret.slice(0, 6) + "•".repeat(12) + secret.slice(-6),
       secret,
       tgLink: link,
-      tgLinkShort: `t.me/proxy?server=${SERVER.ip}&port=${SERVER.port}`,
+      tgLinkShort: `t.me/proxy?server=${ip}&port=${SERVER.port}`,
       uptime: health.uptime,
     },
     campaigns: getCampaigns(),
@@ -83,9 +84,9 @@ export async function GET(req: Request) {
 
   let state: DashboardState;
   try {
-    state = (await buildLiveState()) ?? demoState();
+    state = (await buildLiveState()) ?? (await demoState());
   } catch {
-    state = demoState();
+    state = await demoState();
   }
 
   return NextResponse.json(state);

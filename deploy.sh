@@ -94,6 +94,16 @@ if [ ! -f .env ]; then
   sed -i "s|^SESSION_SECRET=.*|SESSION_SECRET=${GEN_SESSION}|" .env
   sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${GEN_PGPASS}|" .env
   sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgres://${PG_USER}:${GEN_PGPASS}@127.0.0.1:5432/${PG_DB}|" .env
+
+  # Pin the public IP so the console shows the real server address (not the seed).
+  if ! grep -q '^SERVER_IP=.\+' .env; then
+    DET_IP="$(curl -fsS https://api.ipify.org 2>/dev/null || true)"
+    [ -z "$DET_IP" ] && DET_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -n "$DET_IP" ]; then
+      sed -i "s|^SERVER_IP=.*|SERVER_IP=${DET_IP}|" .env
+      log "  detected SERVER_IP=${DET_IP}"
+    fi
+  fi
   log ".env created with generated secrets."
 else
   log ".env already exists; leaving it untouched (edit it directly to change values)."
