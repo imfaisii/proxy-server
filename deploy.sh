@@ -71,16 +71,32 @@ fi
 # 4. .env (auto-generate secrets on first creation)
 # ---------------------------------------------------------------------------
 if [ ! -f .env ]; then
-  log "Creating .env from .env.example with generated secrets..."
+  log "Creating .env from .env.example..."
   cp .env.example .env
+
+  # Apply any settings passed via the environment, e.g.:
+  #   ADMIN_PASSWORD='...' TUNNEL_TOKEN='...' ./deploy.sh
+  for k in ADMIN_PASSWORD TUNNEL_TOKEN CONSOLE_DOMAIN MTG_DOMAIN MTG_PORT \
+           SERVER_IP COLLECT_CONNECTIONS POSTGRES_USER POSTGRES_DB; do
+    v="${!k:-}"
+    if [ -n "$v" ]; then
+      esc="$(printf '%s' "$v" | sed -e 's/[&|\\]/\\&/g')"
+      sed -i "s|^${k}=.*|${k}=${esc}|" .env
+      log "  set ${k} from environment"
+    fi
+  done
+
+  # Always auto-generate strong secrets (never taken from the environment).
+  PG_USER="${POSTGRES_USER:-mtproxy}"
+  PG_DB="${POSTGRES_DB:-mtproxy}"
   GEN_SESSION="$(openssl rand -hex 24)"
   GEN_PGPASS="$(openssl rand -hex 24)"
-  # Substitute the placeholder secrets. PG password must also flow into DATABASE_URL.
   sed -i "s|^SESSION_SECRET=.*|SESSION_SECRET=${GEN_SESSION}|" .env
   sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${GEN_PGPASS}|" .env
-  sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgres://mtproxy:${GEN_PGPASS}@127.0.0.1:5432/mtproxy|" .env
+  sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgres://${PG_USER}:${GEN_PGPASS}@127.0.0.1:5432/${PG_DB}|" .env
+  log ".env created with generated secrets."
 else
-  log ".env already exists; leaving it untouched."
+  log ".env already exists; leaving it untouched (edit it directly to change values)."
 fi
 
 # Load .env so we can use MTG_DOMAIN, CONSOLE_DOMAIN, TUNNEL_TOKEN below.
@@ -96,7 +112,7 @@ MTG_DOMAIN="${MTG_DOMAIN:-cloudflare.com}"
 $SUDO mkdir -p /etc/mtg
 if [ ! -s /etc/mtg/secret ]; then
   log "Generating FakeTLS secret for domain ${MTG_DOMAIN}..."
-  docker run --rm nineseconds/mtg:2 generate-secret "${MTG_DOMAIN}" | $SUDO tee /etc/mtg/secret >/dev/null
+  $SUDO docker run --rm nineseconds/mtg:2 generate-secret "${MTG_DOMAIN}" | $SUDO tee /etc/mtg/secret >/dev/null
 else
   log "FakeTLS secret already exists; reusing."
 fi
@@ -145,14 +161,14 @@ fi
 # 8. Bring up the stack
 # ---------------------------------------------------------------------------
 log "Building and starting containers..."
-docker compose up -d --build
+$SUDO docker compose up -d --build
 
 # ---------------------------------------------------------------------------
 # 9. Wait for postgres healthy + console http
 # ---------------------------------------------------------------------------
 log "Waiting for postgres to become healthy..."
 for i in $(seq 1 60); do
-  status="$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q postgres)" 2>/dev/null || echo "")"
+  status="$($SUDO docker inspect -f '{{.State.Health.Status}}' "$($SUDO docker compose ps -q postgres)" 2>/dev/null || echo "")"
   if [ "$status" = "healthy" ]; then break; fi
   sleep 2
   if [ "$i" -eq 60 ]; then warn "postgres did not report healthy in time; continuing."; fi
