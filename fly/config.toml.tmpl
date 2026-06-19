@@ -1,0 +1,36 @@
+# telemt config for Fly.io — rendered by fly/entrypoint.sh from env vars.
+# Placeholders (${...}) are filled by envsubst at container start.
+[general]
+# Required for ad_tag / promoted channels (campaigns).
+use_middle_proxy = ${USE_MIDDLE_PROXY}
+log_level = "normal"
+
+[general.modes]
+classic = false
+secure = false
+tls = true
+
+[server]
+port = 443
+
+# Local management API (not exposed publicly on Fly; handy for debugging).
+[server.api]
+enabled = true
+listen = "127.0.0.1:9091"
+whitelist = ["127.0.0.1/32", "::1/128"]
+
+[[server.listeners]]
+ip = "0.0.0.0"
+
+[censorship]
+tls_domain = "${TLS_DOMAIN}"
+mask = true
+tls_emulation = true
+# Writable, ephemeral cache dir (re-fetched on restart; best-effort).
+tls_front_dir = "/tmp/tlsfront"
+
+# The primary connect secret. Its connect link is what you hand to clients.
+[access.users]
+main = "${TELEMT_SECRET}"
+
+# fly/entrypoint.sh appends [access.user_ad_tags] here when AD_TAG is set.

@@ -1,0 +1,29 @@
+# Fly.io deployment for the telemt Telegram MTProxy (raw TCP on 443).
+#
+# WHY FLY AND NOT VERCEL: an MTProxy is a long-running daemon that holds raw
+# TCP/MTProto connections on a public port. Vercel is HTTP-only serverless (no
+# raw-TCP ingress, ~30 min function cap, no daemon) so it CANNOT host it. Fly
+# can, because it exposes a raw TCP service on a dedicated IPv4.
+#
+# This deploys the PROXY only (not the Next.js console / Postgres / stats — those
+# stay on your VPS or need extra Fly apps). See fly/README.md for the full flow.
+
+app = "telemt-proxy"        # <-- change to your unique Fly app name
+primary_region = "fra"      # <-- pick a region near your users (e.g. fra, ams, sin)
+
+[build]
+  dockerfile = "fly/Dockerfile"
+
+# Raw TCP passthrough — telemt does its own FakeTLS, so NO handlers and NO
+# [http_service]. This REQUIRES a dedicated IPv4 (see README): fly ips allocate-v4
+[[services]]
+  protocol = "tcp"
+  internal_port = 443
+
+  [[services.ports]]
+    port = 443
+    handlers = []
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
