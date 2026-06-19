@@ -53,17 +53,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. conntrack accounting sysctls (needed for per-connection byte counts)
+# 3. Host sysctls
 # ---------------------------------------------------------------------------
-log "Configuring conntrack accounting sysctls..."
+log "Configuring host sysctls (conntrack accounting + unprivileged 443 bind)..."
 $SUDO modprobe nf_conntrack 2>/dev/null || warn "modprobe nf_conntrack failed (may already be built-in)."
 SYSCTL_FILE=/etc/sysctl.d/99-mtproxy.conf
-# tcp_timeout_established defaults to 5 DAYS, so dead sessions linger in the
-# conntrack table and inflate the live-connection list. 2h is well above
-# MTProto keepalive intervals, so real sessions survive while dead ones expire.
+# - conntrack acct/timestamp: per-connection byte counts.
+# - tcp_timeout_established: defaults to 5 DAYS, so dead sessions linger in the
+#   conntrack table and inflate the live-connection list. 2h is well above
+#   MTProto keepalive intervals, so real sessions survive while dead ones expire.
+# - ip_unprivileged_port_start=443: telemt runs as a non-root uid and uses host
+#   networking, so it cannot otherwise bind the privileged port 443. This lets
+#   unprivileged processes bind 443+ (lower the value if MTG_PORT < 443).
 DESIRED_SYSCTL='net.netfilter.nf_conntrack_acct=1
 net.netfilter.nf_conntrack_timestamp=1
-net.netfilter.nf_conntrack_tcp_timeout_established=7200'
+net.netfilter.nf_conntrack_tcp_timeout_established=7200
+net.ipv4.ip_unprivileged_port_start=443'
 if [ ! -f "$SYSCTL_FILE" ] || [ "$(cat "$SYSCTL_FILE" 2>/dev/null)" != "$DESIRED_SYSCTL" ]; then
   printf '%s\n' "$DESIRED_SYSCTL" | $SUDO tee "$SYSCTL_FILE" >/dev/null
   $SUDO sysctl --system >/dev/null
