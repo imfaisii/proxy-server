@@ -65,10 +65,13 @@ SYSCTL_FILE=/etc/sysctl.d/99-mtproxy.conf
 # - ip_unprivileged_port_start=443: telemt runs as a non-root uid and uses host
 #   networking, so it cannot otherwise bind the privileged port 443. This lets
 #   unprivileged processes bind 443+ (lower the value if MTG_PORT < 443).
+# - ip_forward=1: required so the wg-easy WireGuard VPN can route client traffic
+#   to the internet (without it the tunnel connects but no traffic passes).
 DESIRED_SYSCTL='net.netfilter.nf_conntrack_acct=1
 net.netfilter.nf_conntrack_timestamp=1
 net.netfilter.nf_conntrack_tcp_timeout_established=7200
-net.ipv4.ip_unprivileged_port_start=443'
+net.ipv4.ip_unprivileged_port_start=443
+net.ipv4.ip_forward=1'
 if [ ! -f "$SYSCTL_FILE" ] || [ "$(cat "$SYSCTL_FILE" 2>/dev/null)" != "$DESIRED_SYSCTL" ]; then
   printf '%s\n' "$DESIRED_SYSCTL" | $SUDO tee "$SYSCTL_FILE" >/dev/null
   $SUDO sysctl --system >/dev/null
@@ -258,6 +261,14 @@ echo "------------------------------------------------------------"
 echo " Campaigns   : open the console -> Campaigns to add promoted"
 echo "               channels. Each needs an ad-tag from @MTProxybot"
 echo "               (/newproxy). telemt manages users at :9091."
+echo "------------------------------------------------------------"
+echo " VPN (phone) : WireGuard via wg-easy is running on UDP 51820."
+echo "               1) Allow inbound UDP 51820 in the Hostinger panel firewall."
+echo "               2) Admin UI is loopback-only; open it over an SSH forward:"
+echo "                    ssh -L 51821:127.0.0.1:51821 root@${PUBLIC_IP}"
+echo "                  then browse http://127.0.0.1:51821 (first run = set admin),"
+echo "                  set Host=${PUBLIC_IP} Port=51820, AllowedIPs=0.0.0.0/0,"
+echo "                  add a client, scan the QR in the WireGuard phone app."
 echo "------------------------------------------------------------"
 if [ -n "${TUNNEL_TOKEN:-}" ]; then
   echo " Console URL : https://${CONSOLE_DOMAIN:-console.nodenocode.com}"
