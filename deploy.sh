@@ -110,7 +110,18 @@ if [ ! -f .env ]; then
   fi
   log ".env created with generated secrets."
 else
-  log ".env already exists; leaving it untouched (edit it directly to change values)."
+  log ".env already exists; migrating stale mtg-era values (custom edits preserved)..."
+  # Old mtg metrics endpoint (:3129) -> telemt Prometheus (:9090). Only the known
+  # old default is rewritten, so a customized value is left untouched.
+  if grep -q '^MTG_METRICS_URL=http://127\.0\.0\.1:3129/metrics' .env; then
+    sed -i 's|^MTG_METRICS_URL=http://127\.0\.0\.1:3129/metrics|MTG_METRICS_URL=http://127.0.0.1:9090/metrics|' .env
+    log "  MTG_METRICS_URL -> telemt :9090"
+  fi
+  # Add the telemt management-API key if the upgrade left it absent.
+  if ! grep -q '^TELEMT_API_URL=' .env; then
+    printf 'TELEMT_API_URL=http://127.0.0.1:9091\n' >> .env
+    log "  added TELEMT_API_URL=http://127.0.0.1:9091"
+  fi
 fi
 
 # Load .env so we can use MTG_DOMAIN, CONSOLE_DOMAIN, TUNNEL_TOKEN below.
