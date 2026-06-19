@@ -12,8 +12,9 @@
 import { CONFIG } from "@/lib/env";
 import { fetchProxyMetrics } from "@/lib/metrics";
 import { listConnections } from "@/lib/conntrack";
+import { warmGeoip, geoLookup } from "@/lib/geoip";
 import { setLatest } from "@/lib/store";
-import { ensureSchema, recordMetrics } from "@/lib/db";
+import { ensureSchema, recordMetrics, recordCountryStats } from "@/lib/db";
 
 const g = globalThis as typeof globalThis & { __mtpPollerStarted?: boolean };
 
@@ -32,6 +33,9 @@ async function start() {
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
+
+  // Warm the GeoIP reader once so per-country aggregation works from the first tick.
+  await warmGeoip();
 
   let running = false;
   let prev: { totalDown: number; totalUp: number; at: number; source?: string } | null = null;
@@ -69,6 +73,33 @@ async function start() {
 
       if (enriched) {
         await recordMetrics(enriched);
+      }
+
+      // Persist AGGREGATE per-country device counts (distinct IPs per country).
+      // Only the counts are written — individual IPs never leave this process.
+      if (conns.length > 0) {
+        const byCode = new Map<
+          string,
+          { country: string; region: string; ips: Set<string> }
+        >();
+        for (const c of conns) {
+          const g = geoLookup(c.ip);
+          const code = g?.code || "??";
+          let e = byCode.get(code);
+          if (!e) {
+            e = { country: g?.country || "Unknown", region: g?.region || "AS", ips: new Set() };
+            byCode.set(code, e);
+          }
+          e.ips.add(c.ip);
+        }
+        await recordCountryStats(
+          [...byCode.entries()].map(([code, e]) => ({
+            code,
+            country: e.country,
+            region: e.region,
+            devices: e.ips.size,
+          })),
+        );
       }
     } catch {
       /* never throw out of the poller */

@@ -6,7 +6,7 @@ import { CONFIG } from "@/lib/env";
 import { geoLookup, warmGeoip } from "@/lib/geoip";
 import { getServerIp } from "@/lib/net";
 import { getLatest } from "@/lib/store";
-import { getActiveHistory, getCampaignMeta } from "@/lib/db";
+import { getActiveHistory, getCampaignMeta, getGeoHistory } from "@/lib/db";
 import { getCampaigns } from "@/lib/data";
 import { fetchProxyMetrics, type MtgMetrics } from "@/lib/metrics";
 import {
@@ -329,6 +329,7 @@ export async function buildLiveState(): Promise<DashboardState | null> {
     countryCount,
   };
 
+  const geoHist = await getGeoHistory();
   const geography: GeographyData = {
     countries: geo,
     regions,
@@ -336,6 +337,13 @@ export async function buildLiveState(): Promise<DashboardState | null> {
     total: display.length,
     restrictedPct: restricted.pct,
     restrictedCount: fn(restricted.count),
+    history: geoHist
+      ? {
+          countries: geoHist.countries,
+          totalCountries: geoHist.countries.length,
+          peakDevices: geoHist.peakDevices,
+        }
+      : undefined,
   };
 
   const meta = await getCampaignMeta();

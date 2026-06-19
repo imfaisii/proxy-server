@@ -28,6 +28,23 @@ export interface ConnectionsData {
   countryCount: number;
 }
 
+export interface CountryStat {
+  code: string;
+  country: string;
+  region: string;
+  peakDevices: number;
+  lastDevices: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+// All-time persisted stats (aggregate counts only — never individual IPs).
+export interface GeoHistory {
+  countries: CountryStat[];
+  totalCountries: number;
+  peakDevices: number;
+}
+
 export interface GeographyData {
   countries: CountryBar[];
   regions: RegionBar[];
@@ -35,6 +52,7 @@ export interface GeographyData {
   total: number;
   restrictedPct: number;
   restrictedCount: string;
+  history?: GeoHistory; // persisted all-time stats; absent when DB is unavailable
 }
 
 export interface ServerInfo {

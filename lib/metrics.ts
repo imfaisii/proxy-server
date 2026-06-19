@@ -177,7 +177,9 @@ export async function fetchProxyMetrics(): Promise<MtgMetrics | null> {
   const [prom, api] = await Promise.all([fetchMtgMetrics(), apiMetrics()]);
   if (!prom && !api) return null;
 
-  const activeConnections = api ? api.activeConnections : prom?.activeConnections ?? 0;
+  // Show unique devices (active_unique_ips), not raw TCP sockets — a single
+  // Telegram client opens several connections, which otherwise reads as "2+".
+  const activeConnections = api ? api.devices : prom?.activeConnections ?? 0;
 
   const promSplit = !!prom && (prom.totalDown > 0 || prom.totalUp > 0);
   const totalDown = promSplit ? prom!.totalDown : api ? api.totalOctets : prom?.totalDown ?? 0;

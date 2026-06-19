@@ -58,6 +58,17 @@ export async function ensureSchema(): Promise<void> {
         channel text NOT NULL DEFAULT '',
         created_at timestamptz NOT NULL DEFAULT now()
       );
+      -- Persistent per-country stats (AGGREGATE counts only; never individual IPs).
+      -- One row per country: peak/last concurrent devices + first/last seen.
+      CREATE TABLE IF NOT EXISTS country_stats (
+        code text PRIMARY KEY,
+        country text NOT NULL DEFAULT '',
+        region text NOT NULL DEFAULT '',
+        peak_devices int NOT NULL DEFAULT 0,
+        last_devices int NOT NULL DEFAULT 0,
+        first_seen timestamptz NOT NULL DEFAULT now(),
+        last_seen timestamptz NOT NULL DEFAULT now()
+      );
       CREATE TABLE IF NOT EXISTS settings (
         key text PRIMARY KEY,
         value jsonb
@@ -86,6 +97,74 @@ export async function recordMetrics(m: MtgMetrics): Promise<void> {
     );
   } catch (err) {
     warnOnce("[db] recordMetrics failed", err);
+  }
+}
+
+// Persist current per-country device counts (aggregate only). Upserts one row
+// per country, tracking the all-time peak and the most recent count + timestamps.
+export async function recordCountryStats(
+  rows: { code: string; country: string; region: string; devices: number }[],
+): Promise<void> {
+  const p = getPool();
+  if (!p || rows.length === 0) return;
+  try {
+    for (const r of rows) {
+      await p.query(
+        `INSERT INTO country_stats (code, country, region, peak_devices, last_devices, first_seen, last_seen)
+         VALUES ($1, $2, $3, $4, $4, now(), now())
+         ON CONFLICT (code) DO UPDATE SET
+           country = EXCLUDED.country,
+           region = EXCLUDED.region,
+           last_devices = EXCLUDED.last_devices,
+           peak_devices = GREATEST(country_stats.peak_devices, EXCLUDED.peak_devices),
+           last_seen = now()`,
+        [r.code, r.country, r.region, Math.round(r.devices)],
+      );
+    }
+  } catch (err) {
+    warnOnce("[db] recordCountryStats failed", err);
+  }
+}
+
+export interface CountryStatRow {
+  code: string;
+  country: string;
+  region: string;
+  peakDevices: number;
+  lastDevices: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+// All-time country stats + the peak concurrent device count from metrics_history.
+export async function getGeoHistory(): Promise<{
+  countries: CountryStatRow[];
+  peakDevices: number;
+} | null> {
+  if (!dbConfigured()) return null;
+  const p = getPool();
+  if (!p) return null;
+  try {
+    const cs = await p.query(
+      `SELECT code, country, region, peak_devices, last_devices, first_seen, last_seen
+       FROM country_stats ORDER BY peak_devices DESC, last_seen DESC LIMIT 50`,
+    );
+    const pk = await p.query(`SELECT COALESCE(MAX(active), 0) AS peak FROM metrics_history`);
+    return {
+      countries: cs.rows.map((r) => ({
+        code: String(r.code),
+        country: String(r.country ?? ""),
+        region: String(r.region ?? ""),
+        peakDevices: Number(r.peak_devices) || 0,
+        lastDevices: Number(r.last_devices) || 0,
+        firstSeen: new Date(r.first_seen).toISOString(),
+        lastSeen: new Date(r.last_seen).toISOString(),
+      })),
+      peakDevices: Number(pk.rows[0]?.peak) || 0,
+    };
+  } catch (err) {
+    warnOnce("[db] getGeoHistory failed", err);
+    return null;
   }
 }
 

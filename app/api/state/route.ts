@@ -37,6 +37,23 @@ async function demoState(): Promise<DashboardState> {
   const ip = await getServerIp();
   const link = `tg://proxy?server=${ip}&port=${SERVER.port}&secret=${secret}`;
 
+  const now = Date.now();
+  const demoHistory = {
+    countries: countryAgg()
+      .slice(0, 12)
+      .map((c, i) => ({
+        code: c.code,
+        country: c.name,
+        region: c.region,
+        peakDevices: c.count + 2,
+        lastDevices: c.count,
+        firstSeen: new Date(now - (3 * 86400000 + i * 3600000)).toISOString(),
+        lastSeen: new Date(now - i * 60000).toISOString(),
+      })),
+    totalCountries: countryCount,
+    peakDevices: INITIAL_LIVE.active,
+  };
+
   return {
     overview: {
       kpis: getKpis(INITIAL_LIVE),
@@ -59,6 +76,7 @@ async function demoState(): Promise<DashboardState> {
       total: conns.length,
       restrictedPct: restrictedPct(),
       restrictedCount: fn(restrictedRawCount()),
+      history: demoHistory,
     },
     server: {
       ip,
