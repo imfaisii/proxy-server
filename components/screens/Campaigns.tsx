@@ -201,6 +201,56 @@ export function Campaigns({
         </div>
       </div>
 
+      {/* Activation steps — a campaign's ad-tag alone does NOT promote anything;
+          Telegram only shows the channel after "Set promotion" in @MTProxybot. */}
+      <div
+        style={{
+          ...card,
+          padding: "14px 18px",
+          marginBottom: 16,
+          background: "#fbfcfe",
+          border: "1px solid #e6ebf5",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: "#2d68f5",
+            marginBottom: 8,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <Icon name="mega" size={14} /> How a promotion goes live
+        </div>
+        <ol
+          style={{
+            margin: 0,
+            paddingLeft: 18,
+            fontSize: 12.5,
+            color: "#5a616b",
+            lineHeight: 1.7,
+          }}
+        >
+          <li>
+            Add the campaign here (or set the global default) — this puts the ad‑tag on
+            its connect link.
+          </li>
+          <li>
+            In <span style={mono}>@MTProxybot</span>: send <span style={mono}>/myproxies</span>{" "}
+            → pick your proxy → <strong>Set promotion</strong> → send the channel&apos;s{" "}
+            <strong>public</strong> link (you must be its admin; private channels are
+            rejected). <em>The tag alone doesn&apos;t promote — this step attaches the channel.</em>
+          </li>
+          <li>
+            Wait ~1 hour for Telegram to propagate. It <strong>won&apos;t show on accounts
+            already subscribed</strong> (including yours) — test from a fresh account.
+          </li>
+        </ol>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 16 }}>
         {/* Campaigns table */}
         <div style={{ ...card, overflow: "hidden" }}>
