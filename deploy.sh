@@ -187,8 +187,14 @@ fi
 # ---------------------------------------------------------------------------
 # 8. Bring up the stack
 # ---------------------------------------------------------------------------
+# Free port 443 from the old mtg engine: --remove-orphans drops the now-removed
+# 'mtg' compose service, and the explicit rm covers a standalone server-setup.sh
+# container. Both are no-ops on a fresh install.
+log "Removing any old mtg proxy container (freeing port 443)..."
+$SUDO docker rm -f mtg >/dev/null 2>&1 || true
+
 log "Building and starting containers..."
-$SUDO docker compose up -d --build
+$SUDO docker compose up -d --build --remove-orphans
 
 # ---------------------------------------------------------------------------
 # 9. Wait for postgres healthy + console http
