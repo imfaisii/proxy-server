@@ -425,41 +425,56 @@ export function getHealth(s: Live): { uptime: string; cards: HealthCard[] } {
 
 // ---- Campaigns -----------------------------------------------------------
 
+// A campaign == one telemt access-user with its own connect link and ad-tag.
+// Metrics are REAL telemt per-user numbers (no Telegram-side impressions/clicks
+// exist — the proxy never sees those). devices = unique IPs, live = current
+// connections, data = total bytes served via that link.
 export interface Campaign {
-  name: string;
-  channel: string;
+  username: string; // telemt user id — stable key for actions
+  name: string; // friendly display name
+  channel: string; // promoted channel @handle (display only)
+  link: string; // connect link to hand to this campaign's audience
+  adTagMasked: string; // masked ad-tag for display
+  isGlobal: boolean; // the primary "main" user — shown in the hero, not the table
+  enabled: boolean; // telemt user enabled (link works); distinct from active
+  active: boolean;
   statusLabel: string;
   statusDot: string;
   initial: string;
   avatarBg: string;
   avatarColor: string;
-  impressions: string;
-  clicks: string;
-  ctr: string;
+  devices: string; // unique devices reached (active_unique_ips)
+  live: string; // live connections right now (current_connections)
+  data: string; // data served (total_octets)
 }
 
-const CAMP_RAW: [string, string, string, string, string, number, number][] = [
-  ["CryptoSignals Pro", "@cryptosignals", "Active", "#15a05a", "#2d68f5", 128430, 5212],
-  ["ProxyNews Updates", "@proxy_news", "Active", "#15a05a", "#7c5cff", 96120, 3840],
-  ["VPN Deals Weekly", "@vpndeals", "Paused", "#9aa0aa", "#f59e0b", 41280, 1190],
+// [name, channel, color, active, uniqueIps, liveConns, bytes]
+const CAMP_RAW: [string, string, string, boolean, number, number, number][] = [
+  ["CryptoSignals Pro", "@cryptosignals", "#2d68f5", true, 842, 37, 18.7 * G],
+  ["ProxyNews Updates", "@proxy_news", "#7c5cff", true, 611, 24, 9.1 * G],
+  ["VPN Deals Weekly", "@vpndeals", "#f59e0b", false, 190, 0, 1.4 * G],
 ];
 
 export function getCampaigns(): Campaign[] {
-  return CAMP_RAW.map((c) => ({
+  return CAMP_RAW.map((c, i) => ({
+    username: i === 0 ? "main" : "demo" + i,
     name: c[0],
     channel: c[1],
-    statusLabel: c[2],
-    statusDot: c[3],
+    link: "",
+    adTagMasked: "demo••••demo",
+    isGlobal: i === 0,
+    enabled: c[3],
+    active: c[3],
+    statusLabel: c[3] ? "Active" : "Paused",
+    statusDot: c[3] ? "#15a05a" : "#9aa0aa",
     initial: c[0][0],
-    avatarBg: c[4] + "1a",
-    avatarColor: c[4],
-    impressions: fn(c[5]),
-    clicks: fn(c[6]),
-    ctr: ((c[6] / c[5]) * 100).toFixed(1) + "%",
+    avatarBg: c[2] + "1a",
+    avatarColor: c[2],
+    devices: fn(c[4]),
+    live: fn(c[5]),
+    data: fb(c[6]),
   }));
 }
-
-export const FREQ_OPTS = ["On connect", "30 min", "2 hr"];
 
 export const FILTER_DEF: [string, string][] = [
   ["all", "All"],
@@ -485,7 +500,7 @@ export const SCREEN_TITLES: Record<string, [string, string]> = {
   overview: ["Overview", "Real-time proxy activity & health"],
   connections: ["Connections", "Every active session through your proxy"],
   geography: ["Geography", "Where your traffic comes from"],
-  campaigns: ["Campaigns", "Sponsored channels & in-proxy messages"],
+  campaigns: ["Campaigns", "Promoted channels per connect link"],
   settings: ["Settings", "Server configuration & security"],
 };
 

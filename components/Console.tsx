@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { NAV_DEF, REGION_META, SCREEN_TITLES, fb, fn } from "@/lib/data";
 import { useDashboard } from "@/lib/useDashboard";
 import { mono } from "@/components/ui";
@@ -13,7 +13,7 @@ import { Campaigns } from "@/components/screens/Campaigns";
 import { Settings } from "@/components/screens/Settings";
 
 export default function Console() {
-  const { authed, state, loginError, login, logout } = useDashboard();
+  const { authed, state, loginError, login, logout, refresh } = useDashboard();
   const [pw, setPw] = useState("");
   const [screen, setScreen] = useState("overview");
   const [search, setSearch] = useState("");
@@ -21,19 +21,56 @@ export default function Console() {
   const [secretRevealed, setSecretRevealed] = useState(false);
   const [toast, setToast] = useState("");
   const [connFilter, setConnFilter] = useState("all");
-  const [freq, setFreq] = useState("30 min");
-  const [campaignOn, setCampaignOn] = useState(true);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Seed the campaign toggle from server state once, on first load.
-  const campaignSeeded = useRef(false);
-  useEffect(() => {
-    if (state && !campaignSeeded.current) {
-      campaignSeeded.current = true;
-      setCampaignOn(state.campaignOn);
+  // ---- Campaign mutations (telemt-backed; refresh state after each) ---------
+  async function campaignReq(
+    method: "POST" | "PATCH" | "DELETE",
+    body: Record<string, unknown>,
+  ): Promise<{ ok: boolean; link?: string; error?: string }> {
+    try {
+      const res = await fetch("/api/campaigns", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        link?: string;
+        error?: string;
+      };
+      await refresh();
+      return { ok: res.ok, link: data.link, error: data.error };
+    } catch {
+      return { ok: false, error: "Network error" };
     }
-  }, [state]);
+  }
+
+  const createCampaign = async (input: {
+    name: string;
+    channel: string;
+    adTag: string;
+    global: boolean;
+  }) => {
+    const r = await campaignReq("POST", input);
+    showToast(r.ok ? (input.global ? "Global channel set" : "Campaign created") : r.error || "Failed");
+    return r;
+  };
+
+  const toggleGlobal = async (on: boolean) => {
+    const r = await campaignReq("PATCH", { username: "main", on });
+    if (!r.ok) showToast(r.error || "Could not toggle");
+  };
+
+  const pauseCampaign = async (username: string, enabled: boolean) => {
+    const r = await campaignReq("PATCH", { username, enabled });
+    showToast(r.ok ? (enabled ? "Campaign resumed" : "Campaign paused") : r.error || "Failed");
+  };
+
+  const deleteCampaign = async (username: string) => {
+    const r = await campaignReq("DELETE", { username });
+    showToast(r.ok ? "Campaign deleted" : r.error || "Failed");
+  };
 
   function showToast(msg: string) {
     setToast(msg);
@@ -308,7 +345,7 @@ export default function Console() {
             const badge =
               item.id === "connections"
                 ? fn(state.connections.total)
-                : item.id === "campaigns" && campaignOn
+                : item.id === "campaigns" && state.campaignOn
                   ? "ON"
                   : "";
             const badgeColor = item.id === "campaigns" ? "#15803d" : "#5a616b";
@@ -560,10 +597,12 @@ export default function Console() {
           {screen === "campaigns" && (
             <Campaigns
               campaigns={state.campaigns}
-              campaignOn={campaignOn}
-              toggleCampaign={() => setCampaignOn((v) => !v)}
-              freq={freq}
-              setFreq={setFreq}
+              campaignOn={state.campaignOn}
+              onToggleGlobal={toggleGlobal}
+              onCreate={createCampaign}
+              onPause={pauseCampaign}
+              onDelete={deleteCampaign}
+              onCopy={copy}
             />
           )}
           {screen === "settings" && (

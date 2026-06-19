@@ -1,9 +1,13 @@
-// Reads the mtg v2 Prometheus metrics endpoint and maps it to the small set of
-// numbers the console cares about. Tolerates missing series and never throws.
+// Reads the telemt Prometheus metrics endpoint (:9090/metrics) and maps it to
+// the small set of numbers the console cares about. Tolerates missing series and
+// never throws. Matching is substring-based so it survives minor naming
+// differences and also still parses mtg-style names.
 //
-// NOTE: exact mtg metric names can be confirmed by curling the live endpoint
-// (e.g. `curl http://127.0.0.1:3129/metrics`). The mapping below matches on
-// substrings of the metric name so it survives minor naming differences.
+// telemt per-user series: telemt_user_connections_current (gauge) and
+// telemt_user_octets_to_client / telemt_user_octets_from_client (counters;
+// direction is in the NAME, not a label). Confirm names by curling the live
+// endpoint (`curl http://127.0.0.1:9090/metrics`). fetchProxyMetrics prefers the
+// REST API for the active count and falls back to it for byte totals.
 import { CONFIG } from "@/lib/env";
 
 export interface MtgMetrics {
@@ -13,6 +17,9 @@ export interface MtgMetrics {
   rateDown: number;
   rateUp: number;
   replayAttacks: number;
+  // Which source produced the byte totals, so the poller can avoid computing a
+  // bogus rate across a source switch (the two sources count bytes differently).
+  source?: "prom" | "api";
 }
 
 export interface PromSample {
@@ -21,10 +28,10 @@ export interface PromSample {
   value: number;
 }
 
-let warned = false;
+const warned = new Set<string>();
 function warnOnce(msg: string, err?: unknown) {
-  if (warned) return;
-  warned = true;
+  if (warned.has(msg)) return;
+  warned.add(msg);
   console.warn(msg, err ?? "");
 }
 
@@ -81,9 +88,14 @@ function isDownLabel(labels: Record<string, string>): boolean {
   // Explicit direction-ish hints first.
   if (joined.includes("to_client") || joined.includes("from_telegram")) return true;
   if (joined.includes("from_client") || joined.includes("to_telegram")) return false;
-  // Generic "direction" label: client-bound => down.
+  // Generic "direction"/"dir" label. telemt-style values: down/up, rx/tx,
+  // download/upload, egress/ingress. client-bound => down.
   const dir = (labels.direction || labels.dir || "").toLowerCase();
-  if (dir) return dir.includes("client") && !dir.includes("from_client");
+  if (dir) {
+    if (dir.includes("down") || dir.includes("rx") || dir.includes("egress")) return true;
+    if (dir.includes("up") || dir.includes("tx") || dir.includes("ingress")) return false;
+    return dir.includes("client") && !dir.includes("from_client");
+  }
   // Fallback: anything mentioning "client" treated as down.
   return joined.includes("client");
 }
@@ -105,14 +117,25 @@ function mapMetrics(samples: PromSample[]): MtgMetrics {
   for (const s of samples) {
     const n = s.name.toLowerCase();
 
-    if (n.includes("client_connections")) {
+    // telemt: telemt_user_connections_current{user} (gauge, summed over users).
+    // mtg: *client_connections* / *telegram_connections*. (NOT *_connections_total,
+    // which is cumulative, not "active".)
+    if (n.includes("connections_current") || n.includes("client_connections")) {
       activeConnections += s.value;
     } else if (n.includes("telegram_connections")) {
       activeFallback += s.value;
     }
 
-    if (n.includes("traffic")) {
-      const down = isDownLabel(s.labels);
+    // telemt user traffic is telemt_user_octets_{to,from}_client — direction is
+    // in the NAME. Match "octets"/"traffic" only, NOT "bytes": telemt's internal
+    // counters (telemt_me_*_bytes_total, quota_refund_bytes_total, rate_limiter_*)
+    // contain "bytes" and would be mislabeled as traffic.
+    if (n.includes("octets") || n.includes("traffic")) {
+      const down = n.includes("to_client")
+        ? true
+        : n.includes("from_client")
+          ? false
+          : isDownLabel(s.labels);
       if (n.includes("client")) {
         if (down) clientDown += s.value;
         else clientUp += s.value;
@@ -142,6 +165,32 @@ function mapMetrics(samples: PromSample[]): MtgMetrics {
     rateDown: 0, // derived by the poller from deltas
     rateUp: 0,
     replayAttacks,
+  };
+}
+
+// Preferred entry point. Active connections come from telemt's REST API
+// (current_connections — reliable and correctly "active"); the byte down/up
+// split comes from Prometheus octets when present, else the REST total (a single
+// cumulative number shown as downloaded). Returns null only when both are down.
+export async function fetchProxyMetrics(): Promise<MtgMetrics | null> {
+  const { apiMetrics } = await import("@/lib/telemt");
+  const [prom, api] = await Promise.all([fetchMtgMetrics(), apiMetrics()]);
+  if (!prom && !api) return null;
+
+  const activeConnections = api ? api.activeConnections : prom?.activeConnections ?? 0;
+
+  const promSplit = !!prom && (prom.totalDown > 0 || prom.totalUp > 0);
+  const totalDown = promSplit ? prom!.totalDown : api ? api.totalOctets : prom?.totalDown ?? 0;
+  const totalUp = promSplit ? prom!.totalUp : 0;
+
+  return {
+    activeConnections,
+    totalDown,
+    totalUp,
+    rateDown: 0,
+    rateUp: 0,
+    replayAttacks: prom?.replayAttacks ?? 0,
+    source: promSplit ? "prom" : "api",
   };
 }
 

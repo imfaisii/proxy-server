@@ -1,0 +1,45 @@
+# telemt config — rendered by deploy.sh (only on first run; telemt owns it after,
+# since it persists users/ad-tags to disk).
+# Placeholders: __SECRET__, __TLS_DOMAIN__, __PORT__.
+[general]
+# Middle-proxy mode is REQUIRED for ad_tag (promoted channels) to work.
+use_middle_proxy = true
+log_level = "normal"
+
+[general.modes]
+classic = false
+secure = false
+tls = true
+
+[server]
+port = __PORT__
+# Prometheus metrics for the console's KPI tiles (host loopback only).
+metrics_port = 9090
+metrics_listen = "127.0.0.1:9090"
+metrics_whitelist = ["127.0.0.1/32", "::1/128"]
+
+# REST API the console uses to CRUD campaigns (users + per-user ad-tags).
+[server.api]
+enabled = true
+listen = "127.0.0.1:9091"
+whitelist = ["127.0.0.1/32", "::1/128"]
+
+[[server.listeners]]
+ip = "0.0.0.0"
+
+[censorship]
+tls_domain = "__TLS_DOMAIN__"
+mask = true
+tls_emulation = true
+# Absolute path on the writable :rw mount so the TLS-front cache persists across
+# restarts (a relative path would resolve to the read-only working dir).
+tls_front_dir = "/etc/telemt/tlsfront"
+
+# The primary shared link. Its connect link is shown in the console header/Settings;
+# its ad-tag (set via the console) is the "global" promoted channel for everyone on it.
+[access.users]
+main = "__SECRET__"
+
+# Per-campaign users + ad-tags are created at runtime via the console (telemt :9091).
+# [access.user_ad_tags]
+#   main = "<global promoted-channel tag from @MTProxybot>"

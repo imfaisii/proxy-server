@@ -3,6 +3,7 @@
 // each request). Returns [] when collection is disabled or conntrack is missing.
 import { execFile } from "node:child_process";
 import { CONFIG } from "@/lib/env";
+import { getServerIp } from "@/lib/net";
 
 export interface HostConn {
   ip: string;
@@ -11,10 +12,10 @@ export interface HostConn {
   up: number;
 }
 
-let warned = false;
+const warned = new Set<string>();
 function warnOnce(msg: string, err?: unknown) {
-  if (warned) return;
-  warned = true;
+  if (warned.has(msg)) return;
+  warned.add(msg);
   console.warn(msg, err ?? "");
 }
 
@@ -40,9 +41,11 @@ const PORT = String(CONFIG.MTG_PORT);
 
 // A real client is a remote, public peer. Exclude private/loopback/link-local
 // addresses and the server's own IP so we don't count the proxy's OUTBOUND
-// connections to Telegram (mtg -> DC :443) or docker-internal flows as clients.
-function isLocalOrServer(ip: string): boolean {
-  if (CONFIG.SERVER_IP && ip === CONFIG.SERVER_IP) return true;
+// connections to Telegram (proxy -> DC :443) or docker-internal flows as clients.
+// serverIp is resolved at call time (env SERVER_IP, else detected public IP) so
+// the proxy's own egress flows are filtered even when SERVER_IP isn't set.
+function isLocalOrServer(ip: string, serverIp: string): boolean {
+  if (serverIp && ip === serverIp) return true;
   if (ip.startsWith("127.") || ip === "::1" || ip.startsWith("fe80:")) return true;
   if (ip.startsWith("10.") || ip.startsWith("192.168.")) return true;
   if (ip.startsWith("fc") || ip.startsWith("fd")) return true; // IPv6 ULA
@@ -61,7 +64,7 @@ function isLocalOrServer(ip: string): boolean {
 //   dport=51000 [bytes=5678] [ASSURED] [start=...]
 // The first src/dst block is the ORIGINAL direction; with acct enabled there
 // are two `bytes=` fields (original then reply).
-function parseLine(line: string): HostConn | null {
+function parseLine(line: string, serverIp: string): HostConn | null {
   // Only count live client sessions, not handshakes/teardown (TIME_WAIT, etc.).
   if (!line.includes("ESTABLISHED")) return null;
   if (!line.includes("dport=" + PORT) && !line.includes("sport=" + PORT)) {
@@ -78,18 +81,24 @@ function parseLine(line: string): HostConn | null {
   // The client is the src of the ORIGINAL direction: the original tuple's
   // dport is the proxy port (client -> server). Fall back to first src.
   let clientIp = srcMatches[0];
+  let reversed = false;
   if (dportMatches[0] !== PORT && sportMatches[0] === PORT && srcMatches[1]) {
     // Original direction reversed in output ordering; client is the other src.
     clientIp = srcMatches[1];
+    reversed = true;
   }
 
   // Drop the proxy's own outbound flows to Telegram and any docker-internal
   // traffic: a genuine client is a remote, public peer.
-  if (isLocalOrServer(clientIp)) return null;
+  if (isLocalOrServer(clientIp, serverIp)) return null;
 
-  // Original bytes ~ client->server (up); reply bytes ~ server->client (down).
-  const up = bytesMatches.length > 0 ? bytesMatches[0] : 0;
-  const down = bytesMatches.length > 1 ? bytesMatches[1] : 0;
+  // Each [bytes=N] block follows its own direction's tuple. Normally [0] is the
+  // original (client->server = up) and [1] the reply (server->client = down);
+  // when the tuple ordering is reversed, the byte blocks are reversed too.
+  const b0 = bytesMatches.length > 0 ? bytesMatches[0] : 0;
+  const b1 = bytesMatches.length > 1 ? bytesMatches[1] : 0;
+  const up = reversed ? b1 : b0;
+  const down = reversed ? b0 : b1;
 
   // [start=EPOCH] timestamp gives flow age when -o timestamp is supported.
   let sinceSecs = 0;
@@ -107,12 +116,15 @@ function parseLine(line: string): HostConn | null {
 export async function listConnections(): Promise<HostConn[]> {
   if (!CONFIG.COLLECT_CONNECTIONS) return [];
   try {
+    // Resolve the server's own IP so we never count its egress to Telegram DCs
+    // as a client (cached after the first call, so this is cheap per poll).
+    const serverIp = CONFIG.SERVER_IP || (await getServerIp());
     const out = await run();
     if (!out) return [];
     const conns: HostConn[] = [];
     for (const line of out.split("\n")) {
       if (!line.trim()) continue;
-      const c = parseLine(line);
+      const c = parseLine(line, serverIp);
       if (c) conns.push(c);
     }
     return conns;

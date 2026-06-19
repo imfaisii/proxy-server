@@ -10,7 +10,7 @@
 // PRIVACY: conntrack results live only in the in-memory store (recomputed each
 // poll); they are NEVER passed to recordMetrics or otherwise persisted.
 import { CONFIG } from "@/lib/env";
-import { fetchMtgMetrics } from "@/lib/metrics";
+import { fetchProxyMetrics } from "@/lib/metrics";
 import { listConnections } from "@/lib/conntrack";
 import { setLatest } from "@/lib/store";
 import { ensureSchema, recordMetrics } from "@/lib/db";
@@ -34,21 +34,24 @@ async function start() {
   }
 
   let running = false;
-  let prev: { totalDown: number; totalUp: number; at: number } | null = null;
+  let prev: { totalDown: number; totalUp: number; at: number; source?: string } | null = null;
 
   async function tick() {
     if (running) return; // guard against overlapping runs
     running = true;
     try {
       const [metrics, conns] = await Promise.all([
-        fetchMtgMetrics(),
+        fetchProxyMetrics(),
         listConnections(),
       ]);
 
       let enriched = metrics;
       if (metrics) {
         const now = Date.now();
-        if (prev) {
+        // Only diff against the previous sample when it came from the SAME source
+        // — Prometheus and the REST fallback count bytes differently, so a source
+        // switch would otherwise yield a bogus rate spike.
+        if (prev && prev.source === metrics.source) {
           const secs = (now - prev.at) / 1000;
           if (secs > 0) {
             const dDown = metrics.totalDown - prev.totalDown;
@@ -59,7 +62,7 @@ async function start() {
             enriched = { ...metrics, rateDown, rateUp };
           }
         }
-        prev = { totalDown: metrics.totalDown, totalUp: metrics.totalUp, at: now };
+        prev = { totalDown: metrics.totalDown, totalUp: metrics.totalUp, at: now, source: metrics.source };
       }
 
       setLatest({ metrics: enriched, conns, updatedAt: Date.now() });

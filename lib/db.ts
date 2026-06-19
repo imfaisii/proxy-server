@@ -1,16 +1,18 @@
-// Postgres access for AGGREGATE history and campaigns.
-// PRIVACY: only aggregate metrics and campaign config are ever persisted here.
+// Postgres access for AGGREGATE history and campaign DISPLAY metadata only.
+// telemt is the source of truth for campaigns (users/secrets/ad-tags/links);
+// here we persist just the human-facing bits telemt has no concept of — a
+// friendly name and the promoted channel @handle — keyed by telemt username.
+// PRIVACY: only aggregate metrics and this metadata are ever persisted here.
 // Client IP / connection data MUST NEVER be written to the DB.
 // Every function degrades gracefully (no-op / null / []) and NEVER throws.
 import { Pool } from "pg";
 import { CONFIG } from "@/lib/env";
-import { fn, PALETTE, type Campaign } from "@/lib/data";
 import type { MtgMetrics } from "@/lib/metrics";
 
-let warned = false;
+const warned = new Set<string>();
 function warnOnce(msg: string, err?: unknown) {
-  if (warned) return;
-  warned = true;
+  if (warned.has(msg)) return;
+  warned.add(msg);
   console.warn(msg, err ?? "");
 }
 
@@ -50,13 +52,10 @@ export async function ensureSchema(): Promise<void> {
         rate_up int,
         blocked int
       );
-      CREATE TABLE IF NOT EXISTS campaigns (
-        id serial PRIMARY KEY,
+      CREATE TABLE IF NOT EXISTS campaign_meta (
+        username text PRIMARY KEY,
         name text NOT NULL,
-        channel text NOT NULL,
-        status text NOT NULL DEFAULT 'Active',
-        impressions bigint DEFAULT 0,
-        clicks bigint DEFAULT 0,
+        channel text NOT NULL DEFAULT '',
         created_at timestamptz NOT NULL DEFAULT now()
       );
       CREATE TABLE IF NOT EXISTS settings (
@@ -108,60 +107,85 @@ export async function getActiveHistory(points: number): Promise<number[]> {
   }
 }
 
-function toCampaign(row: {
+export interface CampaignMetaRow {
   name: string;
   channel: string;
-  status: string;
-  impressions: number | string;
-  clicks: number | string;
-}, idx: number): Campaign {
-  const impressions = Number(row.impressions) || 0;
-  const clicks = Number(row.clicks) || 0;
-  const color = PALETTE[idx % PALETTE.length];
-  const active = String(row.status).toLowerCase() === "active";
-  return {
-    name: row.name,
-    channel: row.channel,
-    statusLabel: row.status,
-    statusDot: active ? "#15a05a" : "#9aa0aa",
-    initial: row.name ? row.name[0] : "?",
-    avatarBg: color + "1a",
-    avatarColor: color,
-    impressions: fn(impressions),
-    clicks: fn(clicks),
-    ctr: (impressions > 0 ? (clicks / impressions) * 100 : 0).toFixed(1) + "%",
-  };
 }
 
-export async function listCampaigns(): Promise<Campaign[] | null> {
+// username -> { name, channel }. Returns null when the DB is unconfigured or
+// unreachable (callers then fall back to the telemt username as the label).
+export async function getCampaignMeta(): Promise<Map<string, CampaignMetaRow> | null> {
   if (!dbConfigured()) return null;
   const p = getPool();
   if (!p) return null;
   try {
-    const res = await p.query(
-      `SELECT name, channel, status, impressions, clicks
-       FROM campaigns ORDER BY created_at ASC, id ASC`,
-    );
-    return res.rows.map((r, i) => toCampaign(r, i));
+    const res = await p.query(`SELECT username, name, channel FROM campaign_meta`);
+    const m = new Map<string, CampaignMetaRow>();
+    for (const r of res.rows) {
+      m.set(String(r.username), {
+        name: String(r.name),
+        channel: String(r.channel ?? ""),
+      });
+    }
+    return m;
   } catch (err) {
-    warnOnce("[db] listCampaigns failed", err);
+    warnOnce("[db] getCampaignMeta failed", err);
     return null;
   }
 }
 
-export async function saveCampaign(c: {
-  name: string;
-  channel: string;
-  status: string;
-}): Promise<void> {
+export async function saveCampaignMeta(
+  username: string,
+  name: string,
+  channel: string,
+): Promise<void> {
   const p = getPool();
   if (!p) return;
   try {
     await p.query(
-      `INSERT INTO campaigns (name, channel, status) VALUES ($1, $2, $3)`,
-      [c.name, c.channel, c.status],
+      `INSERT INTO campaign_meta (username, name, channel) VALUES ($1, $2, $3)
+       ON CONFLICT (username) DO UPDATE SET name = EXCLUDED.name, channel = EXCLUDED.channel`,
+      [username, name, channel],
     );
   } catch (err) {
-    warnOnce("[db] saveCampaign failed", err);
+    warnOnce("[db] saveCampaignMeta failed", err);
+  }
+}
+
+export async function deleteCampaignMeta(username: string): Promise<void> {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.query(`DELETE FROM campaign_meta WHERE username = $1`, [username]);
+  } catch (err) {
+    warnOnce("[db] deleteCampaignMeta failed", err);
+  }
+}
+
+// Small key/value store (jsonb). Used for the global-default promo config so the
+// hero toggle can restore the channel's ad-tag after it was switched off.
+export async function getSetting<T = unknown>(key: string): Promise<T | null> {
+  const p = getPool();
+  if (!p) return null;
+  try {
+    const res = await p.query(`SELECT value FROM settings WHERE key = $1`, [key]);
+    return res.rows[0] ? (res.rows[0].value as T) : null;
+  } catch (err) {
+    warnOnce("[db] getSetting failed", err);
+    return null;
+  }
+}
+
+export async function setSetting(key: string, value: unknown): Promise<void> {
+  const p = getPool();
+  if (!p) return;
+  try {
+    await p.query(
+      `INSERT INTO settings (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [key, JSON.stringify(value)],
+    );
+  } catch (err) {
+    warnOnce("[db] setSetting failed", err);
   }
 }

@@ -16,14 +16,29 @@ services:
       retries: 10
     restart: unless-stopped
 
-  mtg:
-    image: nineseconds/mtg:2
-    command: run /config.toml
+  telemt:
+    image: ghcr.io/telemt/telemt:latest
+    command: ["/etc/telemt/config.toml"]
+    # Host networking so telemt's API/metrics whitelist (127.0.0.1) actually sees
+    # loopback when the host-networked console connects — published ports would
+    # SNAT the source to the docker bridge gateway and the whitelist would reject.
+    network_mode: host
+    # cwd on the writable tmpfs so telemt's runtime proxy-secret cache (needed for
+    # use_middle_proxy/ad_tag) isn't written to the read-only rootfs. Matches upstream.
+    working_dir: /run/telemt
     volumes:
-      - ./mtg/config.toml:/config.toml:ro
-    ports:
-      - "443:443"
-      - "127.0.0.1:3129:3129"
+      # :rw — telemt persists users/ad-tags (disk-first) + the tls_front cache here.
+      # Must be writable by telemt's nonroot uid (deploy.sh chowns it).
+      - ./telemt:/etc/telemt:rw
+    tmpfs:
+      - /run/telemt:size=8M,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     restart: unless-stopped
 
   console:
@@ -33,7 +48,6 @@ services:
     cap_add:
       - NET_ADMIN
     volumes:
-      - /etc/mtg/secret:/etc/mtg/secret:ro
       - ./data/geoip:/app/data/geoip:ro
     depends_on:
       postgres:

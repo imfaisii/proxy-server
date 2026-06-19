@@ -2,14 +2,19 @@
 // aggregate DB history), reusing the seed formatters and type shapes so the
 // live output is visually identical to the demo fallback. Connection data is
 // recomputed each request and NEVER persisted (privacy).
-import { existsSync, readFileSync } from "node:fs";
 import { CONFIG } from "@/lib/env";
 import { geoLookup, warmGeoip } from "@/lib/geoip";
 import { getServerIp } from "@/lib/net";
 import { getLatest } from "@/lib/store";
-import { getActiveHistory, listCampaigns } from "@/lib/db";
+import { getActiveHistory, getCampaignMeta } from "@/lib/db";
 import { getCampaigns } from "@/lib/data";
-import { fetchMtgMetrics, type MtgMetrics } from "@/lib/metrics";
+import { fetchProxyMetrics, type MtgMetrics } from "@/lib/metrics";
+import {
+  listCampaigns as telemtListCampaigns,
+  getUser,
+  bestLink,
+  PRIMARY_USER,
+} from "@/lib/telemt";
 import { listConnections, type HostConn } from "@/lib/conntrack";
 import {
   fb,
@@ -225,33 +230,44 @@ function healthFrom(m: MtgMetrics, uptimeSecs: number): {
 }
 
 // ---- Server info ---------------------------------------------------------
-function readSecret(): string {
-  if (CONFIG.MTG_SECRET_PATH && existsSync(CONFIG.MTG_SECRET_PATH)) {
-    try {
-      const raw = readFileSync(CONFIG.MTG_SECRET_PATH, "utf8").trim();
-      if (raw) return raw;
-    } catch {
-      /* fall through to seed secret */
-    }
-  }
-  return SERVER.secret;
-}
-
 function maskSecret(secret: string): string {
   if (secret.length <= 12) return secret;
   return secret.slice(0, 6) + "•".repeat(12) + secret.slice(-6);
 }
 
+function extractSecret(link: string): string {
+  const m = link.match(/[?&]secret=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+
+// Cache the last good "main" secret so a transient telemt-API blip (while the
+// proxy is otherwise live) doesn't hand out the demo seed on a live link.
+const g = globalThis as typeof globalThis & { __mtpMainSecret?: string };
+
 export async function buildServerInfo(uptimeSecs: number): Promise<ServerInfo> {
-  const secret = readSecret();
   const ip = await getServerIp();
   const port = CONFIG.MTG_PORT || SERVER.port;
+
+  // Primary connect secret comes from telemt's "main" user when reachable; we
+  // rebuild the link with OUR public ip/port so it's correct regardless of what
+  // telemt put in the server field. Falls back to the last good secret, then the
+  // seed secret offline.
+  let secret = g.__mtpMainSecret || SERVER.secret;
+  const main = await getUser(PRIMARY_USER);
+  if (main) {
+    const fromTelemt = extractSecret(bestLink(main));
+    if (fromTelemt) {
+      secret = fromTelemt;
+      g.__mtpMainSecret = fromTelemt;
+    }
+  }
   const tgLink = `tg://proxy?server=${ip}&port=${port}&secret=${secret}`;
+
   return {
     ip,
     port,
     domain: CONFIG.MTG_DOMAIN || SERVER.domain,
-    image: "nineseconds/mtg:2",
+    image: "ghcr.io/telemt/telemt",
     secretMasked: maskSecret(secret),
     secret, // authed request: full secret; the client masks/reveals locally
     tgLink,
@@ -272,7 +288,7 @@ export async function buildLiveState(): Promise<DashboardState | null> {
   const snap = getLatest();
   let metrics = snap.metrics;
   let conns = snap.conns;
-  if (!metrics) metrics = await fetchMtgMetrics();
+  if (!metrics) metrics = await fetchProxyMetrics();
   if (!conns || conns.length === 0) conns = await listConnections();
 
   // No live signal at all -> let the caller fall back to demo.
@@ -322,7 +338,12 @@ export async function buildLiveState(): Promise<DashboardState | null> {
     restrictedCount: fn(restricted.count),
   };
 
-  const campaigns = (await listCampaigns()) ?? getCampaigns();
+  const meta = await getCampaignMeta();
+  const host = { ip: await getServerIp(), port: CONFIG.MTG_PORT || SERVER.port };
+  const campaigns = (await telemtListCampaigns(meta, host)) ?? getCampaigns();
+  // The global default promo is "on" when the primary user is actively promoting.
+  const globalCamp = campaigns.find((c) => c.isGlobal);
+  const campaignOn = globalCamp ? globalCamp.active : false;
 
   return {
     overview,
@@ -330,7 +351,7 @@ export async function buildLiveState(): Promise<DashboardState | null> {
     geography,
     server: await buildServerInfo(uptimeSecs),
     campaigns,
-    campaignOn: true,
+    campaignOn,
     source: "live",
     generatedAt: Date.now(),
   };

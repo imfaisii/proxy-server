@@ -18,12 +18,13 @@ export const CONFIG = {
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "admin",
   SESSION_SECRET: process.env.SESSION_SECRET || "dev-insecure-session-secret",
   DATABASE_URL: process.env.DATABASE_URL || "",
-  MTG_METRICS_URL: process.env.MTG_METRICS_URL || "http://127.0.0.1:3129/metrics",
+  // telemt Prometheus metrics (KPI tiles) and management REST API (campaigns).
+  MTG_METRICS_URL: process.env.MTG_METRICS_URL || "http://127.0.0.1:9090/metrics",
+  TELEMT_API_URL: process.env.TELEMT_API_URL || "http://127.0.0.1:9091",
   MTG_DOMAIN: process.env.MTG_DOMAIN || "cloudflare.com",
-  MTG_SECRET_PATH: process.env.MTG_SECRET_PATH || "",
   SERVER_IP: process.env.SERVER_IP as string | undefined,
   MTG_PORT: num(process.env.MTG_PORT, 443),
   COLLECT_CONNECTIONS: bool(process.env.COLLECT_CONNECTIONS, true),
-  GEOIP_PATH: process.env.GEOIP_PATH || "/data/GeoLite2-City.mmdb",
+  GEOIP_PATH: process.env.GEOIP_PATH || "/app/data/geoip/city.mmdb",
   POLL_INTERVAL_MS: num(process.env.POLL_INTERVAL_MS, 5000),
 } as const;

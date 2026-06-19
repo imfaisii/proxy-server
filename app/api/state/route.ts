@@ -31,6 +31,8 @@ async function demoState(): Promise<DashboardState> {
   const countryCount = countryAgg().length;
   const chart = seedChart();
   const health = getHealth(INITIAL_LIVE);
+  const campaigns = getCampaigns();
+  const globalCamp = campaigns.find((c) => c.isGlobal);
   const secret = SERVER.secret;
   const ip = await getServerIp();
   const link = `tg://proxy?server=${ip}&port=${SERVER.port}&secret=${secret}`;
@@ -62,7 +64,7 @@ async function demoState(): Promise<DashboardState> {
       ip,
       port: SERVER.port,
       domain: SERVER.domain,
-      image: "nineseconds/mtg:2",
+      image: "ghcr.io/telemt/telemt",
       secretMasked:
         secret.slice(0, 6) + "•".repeat(12) + secret.slice(-6),
       secret,
@@ -70,8 +72,8 @@ async function demoState(): Promise<DashboardState> {
       tgLinkShort: `t.me/proxy?server=${ip}&port=${SERVER.port}`,
       uptime: health.uptime,
     },
-    campaigns: getCampaigns(),
-    campaignOn: true,
+    campaigns,
+    campaignOn: globalCamp ? globalCamp.active : false,
     source: "demo",
     generatedAt: Date.now(),
   };

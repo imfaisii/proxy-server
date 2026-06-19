@@ -13,6 +13,7 @@ export interface UseDashboard {
   loginError: boolean;
   login: (password: string) => Promise<void>;
   logout: () => Promise<void>;
+  refresh: () => Promise<void>;
 }
 
 export function useDashboard(): UseDashboard {
@@ -106,5 +107,5 @@ export function useDashboard(): UseDashboard {
     setLoginError(false);
   }, []);
 
-  return { authed, state, loading, error, loginError, login, logout };
+  return { authed, state, loading, error, loginError, login, logout, refresh: fetchState };
 }

@@ -1,28 +1,105 @@
 "use client";
 
-import { FREQ_OPTS } from "@/lib/data";
+import { useState } from "react";
 import type { Campaign } from "@/lib/data";
-import { card, mono, inputFocus } from "@/components/ui";
+import { card, mono, tnum, inputFocus } from "@/components/ui";
 import { Icon } from "@/components/Icon";
 import { FX } from "@/components/FX";
+
+export interface CreateInput {
+  name: string;
+  channel: string;
+  adTag: string;
+  global: boolean;
+}
+
+const labelStyle = {
+  display: "block",
+  fontSize: 12,
+  fontWeight: 540,
+  color: "#3f444d",
+  marginBottom: 6,
+} as const;
+
+const fieldStyle = {
+  width: "100%",
+  height: 38,
+  padding: "0 12px",
+  border: "1px solid #e7e9ee",
+  borderRadius: 9,
+  fontSize: 13.5,
+  outline: "none",
+  background: "#fcfcfd",
+  color: "#2b2f37",
+} as const;
+
+const TAG_RE = /^[0-9a-fA-F]{32}$/;
 
 export function Campaigns({
   campaigns,
   campaignOn,
-  toggleCampaign,
-  freq,
-  setFreq,
+  onToggleGlobal,
+  onCreate,
+  onPause,
+  onDelete,
+  onCopy,
 }: {
   campaigns: Campaign[];
   campaignOn: boolean;
-  toggleCampaign: () => void;
-  freq: string;
-  setFreq: (v: string) => void;
+  onToggleGlobal: (on: boolean) => void;
+  onCreate: (input: CreateInput) => Promise<{ ok: boolean; link?: string; error?: string }>;
+  onPause: (username: string, enabled: boolean) => void;
+  onDelete: (username: string) => void;
+  onCopy: (text: string, msg: string) => void;
 }) {
+  const global = campaigns.find((c) => c.isGlobal);
+  const rows = campaigns.filter((c) => !c.isGlobal);
+  // The global toggle can only be enabled once a channel is configured; allow
+  // turning it back off regardless.
+  const toggleDisabled = !global?.channel && !campaignOn;
+
+  const [name, setName] = useState("");
+  const [channel, setChannel] = useState("");
+  const [adTag, setAdTag] = useState("");
+  const [asGlobal, setAsGlobal] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [createdLink, setCreatedLink] = useState("");
+
+  async function submit() {
+    setFormError("");
+    setCreatedLink("");
+    const n = name.trim();
+    const t = adTag.trim();
+    if (!n) {
+      setFormError("Campaign name is required.");
+      return;
+    }
+    if (!t) {
+      setFormError("Ad-tag is required — get it from @MTProxybot (/newproxy).");
+      return;
+    }
+    if (!TAG_RE.test(t)) {
+      setFormError("Ad-tag must be 32 hex characters (from @MTProxybot).");
+      return;
+    }
+    setBusy(true);
+    const r = await onCreate({ name: n, channel: channel.trim(), adTag: t, global: asGlobal });
+    setBusy(false);
+    if (!r.ok) {
+      setFormError(r.error || "Could not create the campaign.");
+      return;
+    }
+    setCreatedLink(r.link || "");
+    setName("");
+    setChannel("");
+    setAdTag("");
+    setAsGlobal(false);
+  }
 
   return (
     <div>
-      {/* Hero banner */}
+      {/* Hero: global sponsored channel */}
       <div
         style={{
           background: "linear-gradient(98deg,#111317,#1d2026)",
@@ -53,19 +130,29 @@ export function Campaigns({
           </div>
           <div>
             <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-.02em" }}>
-              Sponsored channel
+              Global sponsored channel
             </div>
             <div
               style={{
                 fontSize: 13,
                 color: "rgba(255,255,255,.62)",
                 marginTop: 2,
-                maxWidth: 480,
+                maxWidth: 520,
                 lineHeight: 1.5,
               }}
             >
-              Promote a channel to everyone connecting through your proxy. Shown on
-              connect &amp; in periodic Telegram messages.
+              {global?.channel ? (
+                <>
+                  Everyone on your main connection link sees{" "}
+                  <span style={{ color: "#fff", fontWeight: 540 }}>{global.channel}</span>{" "}
+                  promoted in Telegram.
+                </>
+              ) : (
+                <>
+                  Not configured. Add a campaign below with “Set as global default”
+                  to promote one channel to everyone on your main link.
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -74,8 +161,16 @@ export function Campaigns({
             {campaignOn ? "Enabled" : "Disabled"}
           </span>
           <button
-            onClick={toggleCampaign}
+            onClick={() => {
+              if (!toggleDisabled) onToggleGlobal(!campaignOn);
+            }}
+            disabled={toggleDisabled}
             aria-pressed={campaignOn}
+            title={
+              toggleDisabled
+                ? "Add a campaign with “Set as global default” first"
+                : ""
+            }
             style={{
               width: 46,
               height: 26,
@@ -85,6 +180,8 @@ export function Campaigns({
               position: "relative",
               transition: "background .2s",
               flex: "none",
+              cursor: toggleDisabled ? "not-allowed" : "pointer",
+              opacity: toggleDisabled ? 0.5 : 1,
             }}
           >
             <span
@@ -118,6 +215,7 @@ export function Campaigns({
           >
             <div style={{ fontSize: 14, fontWeight: 600 }}>Campaigns</div>
             <FX
+              onClick={() => document.getElementById("camp-name")?.focus()}
               s={{
                 height: 32,
                 padding: "0 13px",
@@ -140,7 +238,7 @@ export function Campaigns({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1.6fr .9fr .9fr .9fr",
+              gridTemplateColumns: "1.7fr .8fr .7fr .9fr 1fr",
               gap: 12,
               padding: "10px 20px",
               background: "#fafbfc",
@@ -153,25 +251,32 @@ export function Campaigns({
             }}
           >
             <div>Campaign</div>
-            <div>Impressions</div>
-            <div>Clicks</div>
-            <div>CTR</div>
+            <div>Devices</div>
+            <div>Live</div>
+            <div>Data served</div>
+            <div style={{ textAlign: "right" }}>Actions</div>
           </div>
-          {campaigns.map((c, i) => (
+
+          {rows.length === 0 && (
+            <div style={{ padding: "28px 20px", textAlign: "center", color: "#9aa0aa", fontSize: 13 }}>
+              No campaigns yet. Create one on the right — each gets its own connect
+              link to hand to a target audience.
+            </div>
+          )}
+
+          {rows.map((c) => (
             <div
-              key={i}
+              key={c.username}
               style={{
                 display: "grid",
-                gridTemplateColumns: "1.6fr .9fr .9fr .9fr",
+                gridTemplateColumns: "1.7fr .8fr .7fr .9fr 1fr",
                 gap: 12,
                 alignItems: "center",
                 padding: "14px 20px",
                 borderTop: "1px solid #f4f5f7",
               }}
             >
-              <div
-                style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}
-              >
+              <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
                 <div
                   style={{
                     width: 36,
@@ -211,162 +316,228 @@ export function Campaigns({
                       gap: 6,
                     }}
                   >
-                    <span
-                      style={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: "50%",
-                        background: c.statusDot,
-                      }}
-                    />
-                    {c.channel} · {c.statusLabel}
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: c.statusDot }} />
+                    {c.channel || "no channel"} · {c.statusLabel}
                   </div>
                 </div>
               </div>
-              <div style={{ fontSize: 13, color: "#3f444d", fontFeatureSettings: "'tnum'" }}>
-                {c.impressions}
-              </div>
-              <div style={{ fontSize: 13, color: "#3f444d", fontFeatureSettings: "'tnum'" }}>
-                {c.clicks}
-              </div>
-              <div
-                style={{
-                  fontSize: 13,
-                  color: "#15a05a",
-                  fontWeight: 540,
-                  fontFeatureSettings: "'tnum'",
-                }}
-              >
-                {c.ctr}
+              <div style={{ fontSize: 13, color: "#3f444d", ...tnum }}>{c.devices}</div>
+              <div style={{ fontSize: 13, color: "#3f444d", ...tnum }}>{c.live}</div>
+              <div style={{ fontSize: 13, color: "#3f444d", ...tnum }}>{c.data}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6 }}>
+                <FX
+                  onClick={() => onCopy(c.link, "Connect link copied")}
+                  title="Copy connect link"
+                  s={{
+                    width: 30,
+                    height: 30,
+                    border: "1px solid #e7e9ee",
+                    borderRadius: 8,
+                    background: "#fff",
+                    color: "#5a616b",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    transition: "background .14s",
+                    opacity: c.link ? 1 : 0.4,
+                  }}
+                  hover={{ background: "#f7f8fa" }}
+                  {...(c.link ? {} : { disabled: true })}
+                >
+                  <Icon name="copy" size={14} />
+                </FX>
+                <FX
+                  onClick={() => onPause(c.username, !c.enabled)}
+                  s={{
+                    height: 30,
+                    padding: "0 10px",
+                    border: "1px solid #e7e9ee",
+                    borderRadius: 8,
+                    background: "#fff",
+                    color: "#5a616b",
+                    fontSize: 12,
+                    fontWeight: 540,
+                    transition: "background .14s",
+                  }}
+                  hover={{ background: "#f7f8fa" }}
+                >
+                  {c.enabled ? "Pause" : "Resume"}
+                </FX>
+                <FX
+                  onClick={() => onDelete(c.username)}
+                  title="Delete campaign"
+                  s={{
+                    width: 30,
+                    height: 30,
+                    border: "1px solid #f1c2c2",
+                    borderRadius: 8,
+                    background: "#fff",
+                    color: "#e5484d",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    transition: "background .14s",
+                  }}
+                  hover={{ background: "#fdf3f3" }}
+                >
+                  <Icon name="close" size={15} sw={2} />
+                </FX>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Quick setup */}
+        {/* New campaign form */}
         <div style={{ ...card, padding: "18px 20px", height: "fit-content" }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
-            Quick setup
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>New campaign</div>
+          <div style={{ fontSize: 12.5, color: "#868d98", marginBottom: 18, lineHeight: 1.5 }}>
+            Creates a connect link with its own promoted channel. Get the ad-tag from
+            @MTProxybot (<span style={mono}>/newproxy</span>).
           </div>
-          <div
-            style={{
-              fontSize: 12.5,
-              color: "#868d98",
-              marginBottom: 18,
-              lineHeight: 1.5,
-            }}
-          >
-            Configure the message connecting users receive.
-          </div>
-          <label
-            style={{
-              display: "block",
-              fontSize: 12,
-              fontWeight: 540,
-              color: "#3f444d",
-              marginBottom: 6,
-            }}
-          >
-            Channel handle
-          </label>
+
+          <label style={labelStyle}>Campaign name</label>
           <FX
             as="input"
-            defaultValue="@proxy_news"
-            s={{
-              width: "100%",
-              height: 38,
-              padding: "0 12px",
-              border: "1px solid #e7e9ee",
-              borderRadius: 9,
-              fontSize: 13.5,
-              fontFamily: mono.fontFamily,
-              marginBottom: 14,
-              outline: "none",
-              background: "#fcfcfd",
-            }}
+            id="camp-name"
+            value={name}
+            onChange={(e) => setName((e.target as HTMLInputElement).value)}
+            placeholder="CryptoSignals Pro"
+            s={{ ...fieldStyle, marginBottom: 14 }}
             focus={inputFocus}
           />
-          <label
-            style={{
-              display: "block",
-              fontSize: 12,
-              fontWeight: 540,
-              color: "#3f444d",
-              marginBottom: 6,
-            }}
-          >
-            Promo message
-          </label>
+
+          <label style={labelStyle}>Channel handle</label>
           <FX
-            as="textarea"
-            defaultValue="📢 Stay updated — join @proxy_news for status & faster servers."
-            s={{
-              width: "100%",
-              height: 78,
-              padding: "10px 12px",
-              border: "1px solid #e7e9ee",
-              borderRadius: 9,
-              fontSize: 13,
-              lineHeight: 1.5,
-              resize: "none",
-              outline: "none",
-              fontFamily: "var(--font-geist-sans), sans-serif",
-              background: "#fcfcfd",
-              color: "#2b2f37",
-            }}
+            as="input"
+            value={channel}
+            onChange={(e) => setChannel((e.target as HTMLInputElement).value)}
+            placeholder="@cryptosignals"
+            s={{ ...fieldStyle, marginBottom: 14, ...mono }}
             focus={inputFocus}
           />
+
+          <label style={labelStyle}>Ad-tag (from @MTProxybot)</label>
+          <FX
+            as="input"
+            value={adTag}
+            onChange={(e) => setAdTag((e.target as HTMLInputElement).value)}
+            placeholder="32 hex characters"
+            s={{ ...fieldStyle, marginBottom: 12, ...mono, fontSize: 12.5 }}
+            focus={inputFocus}
+          />
+
           <label
             style={{
-              display: "block",
-              fontSize: 12,
-              fontWeight: 540,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontSize: 12.5,
               color: "#3f444d",
-              margin: "14px 0 6px",
+              marginBottom: 16,
+              cursor: "pointer",
             }}
           >
-            Frequency
+            <input
+              type="checkbox"
+              checked={asGlobal}
+              onChange={(e) => setAsGlobal(e.target.checked)}
+            />
+            Set as global default (everyone on the main link)
           </label>
-          <div style={{ display: "flex", gap: 6, marginBottom: 18 }}>
-            {FREQ_OPTS.map((f) => {
-              const on = freq === f;
-              return (
-                <button
-                  key={f}
-                  onClick={() => setFreq(f)}
-                  style={{
-                    flex: 1,
-                    height: 34,
-                    borderRadius: 8,
-                    fontSize: 12,
-                    fontWeight: 540,
-                    border: `1px solid ${on ? "#2d68f5" : "#e7e9ee"}`,
-                    background: on ? "#eef3fe" : "#fff",
-                    color: on ? "#2d68f5" : "#5a616b",
-                    transition: "all .14s",
-                  }}
-                >
-                  {f}
-                </button>
-              );
-            })}
-          </div>
+
+          {formError && (
+            <div
+              style={{
+                fontSize: 12,
+                color: "#e5484d",
+                marginBottom: 12,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <Icon name="alert" size={14} sw={2} /> {formError}
+            </div>
+          )}
+
           <FX
+            onClick={() => {
+              if (!busy) void submit();
+            }}
             s={{
               width: "100%",
               height: 40,
               border: "none",
               borderRadius: 9,
-              background: "#111317",
+              background: busy ? "#9aa0aa" : "#111317",
               color: "#fff",
               fontSize: 13.5,
               fontWeight: 560,
               transition: "background .14s",
             }}
-            hover={{ background: "#23262d" }}
+            hover={busy ? {} : { background: "#23262d" }}
           >
-            Save campaign
+            {busy ? "Creating…" : "Create campaign"}
           </FX>
+
+          {createdLink && (
+            <div
+              style={{
+                marginTop: 16,
+                paddingTop: 14,
+                borderTop: "1px solid #f0f1f4",
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 540, color: "#3f444d", marginBottom: 7 }}>
+                Connect link — hand this to your audience:
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "#f7f8fa",
+                  border: "1px solid #eef0f3",
+                  borderRadius: 9,
+                  padding: "8px 10px",
+                }}
+              >
+                <span
+                  style={{
+                    ...mono,
+                    fontSize: 11.5,
+                    color: "#5a616b",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    flex: 1,
+                  }}
+                >
+                  {createdLink}
+                </span>
+                <FX
+                  onClick={() => onCopy(createdLink, "Connect link copied")}
+                  s={{
+                    height: 28,
+                    padding: "0 10px",
+                    border: "none",
+                    borderRadius: 7,
+                    background: "#2d68f5",
+                    color: "#fff",
+                    fontSize: 12,
+                    fontWeight: 540,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 5,
+                    flex: "none",
+                  }}
+                  hover={{ background: "#1f55da" }}
+                >
+                  <Icon name="copy" size={13} /> Copy
+                </FX>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

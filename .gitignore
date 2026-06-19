@@ -48,5 +48,7 @@ next-env.d.ts
 !/data/geoip
 /data/geoip/*
 !/data/geoip/.gitkeep
-mtg/config.toml
-!mtg/config.toml.tmpl
+# telemt runtime dir (rendered config + disk-persisted users + tlsfront); keep the template.
+telemt/config.toml
+telemt/tlsfront/
+!telemt/config.toml.tmpl

@@ -58,8 +58,12 @@ fi
 log "Configuring conntrack accounting sysctls..."
 $SUDO modprobe nf_conntrack 2>/dev/null || warn "modprobe nf_conntrack failed (may already be built-in)."
 SYSCTL_FILE=/etc/sysctl.d/99-mtproxy.conf
+# tcp_timeout_established defaults to 5 DAYS, so dead sessions linger in the
+# conntrack table and inflate the live-connection list. 2h is well above
+# MTProto keepalive intervals, so real sessions survive while dead ones expire.
 DESIRED_SYSCTL='net.netfilter.nf_conntrack_acct=1
-net.netfilter.nf_conntrack_timestamp=1'
+net.netfilter.nf_conntrack_timestamp=1
+net.netfilter.nf_conntrack_tcp_timeout_established=7200'
 if [ ! -f "$SYSCTL_FILE" ] || [ "$(cat "$SYSCTL_FILE" 2>/dev/null)" != "$DESIRED_SYSCTL" ]; then
   printf '%s\n' "$DESIRED_SYSCTL" | $SUDO tee "$SYSCTL_FILE" >/dev/null
   $SUDO sysctl --system >/dev/null
@@ -117,25 +121,27 @@ set +a
 MTG_DOMAIN="${MTG_DOMAIN:-cloudflare.com}"
 
 # ---------------------------------------------------------------------------
-# 5. FakeTLS secret
+# 5 + 6. telemt config (rendered once; telemt then owns it — it persists users
+#        and per-user ad-tags to disk in this dir, plus the tlsfront cache).
 # ---------------------------------------------------------------------------
-$SUDO mkdir -p /etc/mtg
-if [ ! -s /etc/mtg/secret ]; then
-  log "Generating FakeTLS secret for domain ${MTG_DOMAIN}..."
-  $SUDO docker run --rm nineseconds/mtg:2 generate-secret "${MTG_DOMAIN}" | $SUDO tee /etc/mtg/secret >/dev/null
+mkdir -p telemt/tlsfront
+if [ ! -s telemt/config.toml ]; then
+  log "Generating telemt secret + rendering telemt/config.toml (domain ${MTG_DOMAIN})..."
+  SECRET="$(openssl rand -hex 16)"
+  SECRET_ESC="$(printf '%s' "$SECRET" | sed 's/[&/\]/\\&/g')"
+  DOMAIN_ESC="$(printf '%s' "$MTG_DOMAIN" | sed 's/[&/\]/\\&/g')"
+  sed -e "s/__SECRET__/${SECRET_ESC}/" -e "s/__TLS_DOMAIN__/${DOMAIN_ESC}/" \
+    -e "s/__PORT__/${MTG_PORT:-443}/" \
+    telemt/config.toml.tmpl > telemt/config.toml
 else
-  log "FakeTLS secret already exists; reusing."
+  log "telemt/config.toml already exists; reusing (telemt owns it)."
+  # Recover the primary secret for the summary link below.
+  SECRET="$(grep -E '^[[:space:]]*main[[:space:]]*=' telemt/config.toml | head -n1 | sed -E 's/.*"([0-9a-fA-F]+)".*/\1/')"
 fi
-SECRET="$($SUDO cat /etc/mtg/secret)"
 
-# ---------------------------------------------------------------------------
-# 6. Render mtg/config.toml from template
-# ---------------------------------------------------------------------------
-log "Rendering mtg/config.toml..."
-# Use a non-/ delimiter is unnecessary since the secret is hex/base64-safe,
-# but escape via awk-free sed by passing the secret through a temp value.
-SECRET_ESC="$(printf '%s' "$SECRET" | sed 's/[&/\]/\\&/g')"
-sed "s/__SECRET__/${SECRET_ESC}/" mtg/config.toml.tmpl > mtg/config.toml
+# telemt runs as a nonroot uid (distroless 65532) and must write users/ad-tags +
+# the tls_front cache into this bind-mounted dir, so it has to own it.
+$SUDO chown -R 65532:65532 telemt 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 7. GeoIP database (optional)
@@ -194,22 +200,42 @@ for i in $(seq 1 60); do
   if [ "$i" -eq 60 ]; then warn "Console did not respond in time; check 'docker compose logs console'."; fi
 done
 
+# telemt API readiness — campaigns persist through it, so flag failure loudly.
+if curl -fsS -o /dev/null "http://127.0.0.1:9091/v1/users" 2>/dev/null; then
+  log "telemt API is responding on :9091."
+else
+  warn "telemt API not responding on :9091 — campaigns won't persist. Check 'docker compose logs telemt' (config / dir ownership / working_dir)."
+fi
+
 # ---------------------------------------------------------------------------
 # 10. Summary
 # ---------------------------------------------------------------------------
 PUBLIC_IP="${SERVER_IP:-}"
 if [ -z "$PUBLIC_IP" ]; then PUBLIC_IP="$(curl -fsS https://api.ipify.org 2>/dev/null || echo "<unknown>")"; fi
-TG_LINK="tg://proxy?server=${PUBLIC_IP}&port=${MTG_PORT:-443}&secret=${SECRET}"
+# telemt FakeTLS link: ee + 16-byte hex secret + hex(domain). (Same format the
+# console reads back from telemt's API; constructed here for the deploy summary.)
+if [ -n "${SECRET}" ]; then
+  DOMAIN_HEX="$(printf '%s' "${MTG_DOMAIN}" | od -An -tx1 | tr -d ' \n')"
+  EE_SECRET="ee${SECRET}${DOMAIN_HEX}"
+  TG_LINK="tg://proxy?server=${PUBLIC_IP}&port=${MTG_PORT:-443}&secret=${EE_SECRET}"
+else
+  EE_SECRET="(open the console to copy)"
+  TG_LINK="(open the console — Settings — to copy the connection link)"
+fi
 
 echo
 echo "============================================================"
-echo " mtg proxy + console deployed"
+echo " telemt proxy + console deployed"
 echo "============================================================"
 echo " Server IP   : ${PUBLIC_IP}"
 echo " Proxy port  : ${MTG_PORT:-443}"
 echo " FakeTLS SNI : ${MTG_DOMAIN}"
-echo " Secret      : ${SECRET}"
+echo " Secret (ee) : ${EE_SECRET}"
 echo " TG link     : ${TG_LINK}"
+echo "------------------------------------------------------------"
+echo " Campaigns   : open the console -> Campaigns to add promoted"
+echo "               channels. Each needs an ad-tag from @MTProxybot"
+echo "               (/newproxy). telemt manages users at :9091."
 echo "------------------------------------------------------------"
 if [ -n "${TUNNEL_TOKEN:-}" ]; then
   echo " Console URL : https://${CONSOLE_DOMAIN:-console.nodenocode.com}"
